@@ -1,0 +1,108 @@
+{
+  "name": "git-lanes",
+  "displayName": "Git Lanes",
+  "description": "Compact per-branch swimlane git graph with diffs and drag-to-rebase",
+  "version": "0.1.0",
+  "publisher": "chriscorrea14",
+  "icon": "media/icons/icon.png",
+  "license": "MIT",
+  "author": "Christopher Correa",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chriscorrea14/git-lanes.git"
+  },
+  "homepage": "https://github.com/chriscorrea14/git-lanes#readme",
+  "bugs": {
+    "url": "https://github.com/chriscorrea14/git-lanes/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Visualization"
+  ],
+  "main": "./dist/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitLanes.show",
+        "title": "Git Lanes: Show Graph",
+        "icon": "$(git-branch)"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gitLanes.show",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Git Lanes",
+      "properties": {
+        "gitLanes.alignment": {
+          "type": "string",
+          "enum": [
+            "top",
+            "forkPoint"
+          ],
+          "enumDescriptions": [
+            "All branch tips near the top",
+            "Each branch sits just above its fork point"
+          ],
+          "default": "top",
+          "description": "Vertical placement of branch lanes."
+        },
+        "gitLanes.trunk": {
+          "type": "string",
+          "default": "",
+          "description": "Trunk branch. Empty = auto-detect (origin/HEAD, main, master)."
+        },
+        "gitLanes.trunkCommits": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "description": "Minimum number of trunk commits to show."
+        },
+        "gitLanes.subjects": {
+          "type": "string",
+          "enum": [
+            "head",
+            "none"
+          ],
+          "default": "head",
+          "description": "Show commit subjects for the HEAD branch in a message column."
+        },
+        "gitLanes.showMergedLanes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Draw lanes for commits merged into a branch from elsewhere. When off, merges show as diamonds only (hover for what they merged)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p . && node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "test": "vitest run",
+    "package": "npm run build && vsce package",
+    "dev:dump": "esbuild dev/dump-graph.ts --bundle --platform=node --format=esm --outfile=dist/dump-graph.mjs --log-level=warning && node dist/dump-graph.mjs",
+    "icon": "node scripts/build-icon.mjs"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

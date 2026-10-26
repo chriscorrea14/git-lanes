@@ -1,0 +1,30 @@
+name: Release
+
+# Push a tag like v0.2.0 (matching "version" in package.json) to build the .vsix and publish it
+# as a GitHub Release that coworkers can download.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: git config --global user.name ci && git config --global user.email ci@example.com
+      - name: Check the tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - run: npm test
+      - run: npm run package
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: '*.vsix'
+          generate_release_notes: true
