@@ -4,7 +4,7 @@ import type { FileChange, HostMessage, LineStats, PushMode, Settings, WebviewMes
 import type { RebaseState } from '../../src/rebase/execute';
 import type { MergeState } from '../../src/merge/merge';
 import { checkoutTarget } from '../../src/graph/checkout';
-import { draggableLane, invalidTargets } from '../../src/rebase/plan';
+import { draggableLane, invalidReason, invalidTargets } from '../../src/rebase/plan';
 import type { MergedInfo } from '../../src/git/merged';
 import type { RawGraph } from '../../src/types';
 
@@ -93,6 +93,7 @@ app.innerHTML = `
   </div>
   <div class="popover hidden"></div>
   <div class="ghost hidden"></div>
+  <div class="toast hidden" role="status"></div>
   <div class="modal-backdrop hidden">
     <form class="modal push-dialog" role="dialog" aria-labelledby="push-title">
       <h3 id="push-title">Push branch <span class="push-branch"></span></h3>
@@ -123,6 +124,15 @@ const ghost = $<HTMLDivElement>('.ghost');
 const alignSelect = $<HTMLSelectElement>('select.align');
 const mergedLanesBox = $<HTMLInputElement>('input.merged-lanes');
 const modalBackdrop = $<HTMLDivElement>('.modal-backdrop');
+const toast = $<HTMLDivElement>('.toast');
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+/** A short message at the bottom of the panel, e.g. why a drop was refused. */
+function showToast(text: string) {
+  toast.textContent = text;
+  toast.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.add('hidden'), 6000);
+}
 const pushForm = $<HTMLFormElement>('form.push-dialog');
 
 $('[data-act=refresh]').addEventListener('click', () => send({ type: 'refresh' }));
@@ -873,6 +883,8 @@ interface Drag {
   active: boolean;
   invalid: Set<string>;
   over?: string;
+  /** A refused target under the pointer (explained if dropped there). */
+  overRefused?: string;
   /** Whether the press was on the commit's dot or its message-column line. */
   via: 'node' | 'msg';
 }
@@ -912,6 +924,7 @@ svg.addEventListener('pointermove', (ev) => {
   const el = document.elementFromPoint(ev.clientX, ev.clientY);
   const over = shaAt(el);
   const valid = over && !drag.invalid.has(over) ? over : undefined;
+  drag.overRefused = over && !valid ? over : undefined;
   if (valid !== drag.over) {
     if (drag.over) svg.querySelector(`[data-sha="${drag.over}"]`)?.classList.remove('drop-hover');
     if (valid) svg.querySelector(`[data-sha="${valid}"]`)?.classList.add('drop-hover');
@@ -926,6 +939,7 @@ svg.addEventListener('pointerup', (ev) => {
   if (d.active) {
     const lane = state.layout!.lanes[d.lane];
     if (d.over && lane.name) send({ type: 'rebase', branch: lane.name, target: d.over });
+    else if (d.overRefused) showToast(`Can't drop ${lane.name} there: ${invalidReason(state.layout!, d.lane, d.overRefused) ?? 'not a valid target.'}`);
     return;
   }
   // Plain click.

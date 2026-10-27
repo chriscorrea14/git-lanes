@@ -494,6 +494,53 @@ describe('GraphPanel', () => {
     }
   });
 
+  it('rebases onto a branch that merged an older version of it, replaying only the missing commits', async () => {
+    repo = new TestRepo();
+    const m1 = repo.commit('m1');
+    repo.checkout('-b', 'feat');
+    const f1 = repo.commit('f1');
+    // demo merges feat as it was then, and adds its own work.
+    repo.checkout('-b', 'demo', m1);
+    repo.commit('demo work');
+    repo.merge('feat', 'merge feat into demo');
+    const demoTip = repo.commit('demo more');
+    repo.checkout('feat');
+    repo.commit('f2'); // the one commit demo doesn't have
+    repo.checkout('main');
+    open();
+    await send({ type: 'ready' });
+    h.warningAnswer = 'Rebase';
+    await send({ type: 'rebase', branch: 'feat', target: demoTip });
+    expect((h.warnings.at(-1)![1] as { detail: string }).detail).toMatch(/Replays 1 commit onto [\s\S]*already contains part of feat/);
+    expect(repo.rev('feat~1')).toBe(demoTip);
+    expect(repo.sh('log', '-1', '--format=%s', 'feat')).toBe('f2');
+    expect(repo.sh('merge-base', '--is-ancestor', f1, 'feat')).toBe(''); // f1 still in history (via demo)
+  });
+
+  it('rebases a branch that is checked out in another worktree, in that worktree', async () => {
+    repo = new TestRepo();
+    repo.commit('m1');
+    repo.checkout('-b', 'feat');
+    repo.commit('f1');
+    repo.checkout('main');
+    const m2 = repo.commit('m2');
+    const wt = `${repo.dir}-wt`;
+    repo.sh('worktree', 'add', '-q', wt, 'feat');
+    const { rmSync } = await import('node:fs');
+    try {
+      open();
+      await send({ type: 'ready' });
+      h.warningAnswer = 'Rebase';
+      await send({ type: 'rebase', branch: 'feat', target: m2 });
+      expect((h.warnings.at(-1)![1] as { detail: string }).detail).toMatch(/checked out in the worktree .*-wt; the rebase runs there/);
+      expect(repo.rev('feat~1')).toBe(m2);
+      expect(repo.sh('symbolic-ref', '--short', 'HEAD')).toBe('main'); // this worktree untouched
+    } finally {
+      rmSync(wt, { recursive: true, force: true });
+      repo.sh('worktree', 'prune');
+    }
+  });
+
   it('reports squash-merged branches and says so when deleting one', async () => {
     repo = new TestRepo();
     repo.commit('m1');

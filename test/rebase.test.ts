@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadRepo } from '../src/git/repoData';
 import { computeLayout } from '../src/graph/layout';
 import { isDirty, rebaseState, rebaseStep, replayCount, runRebase, undoRebase } from '../src/rebase/execute';
-import { draggableLane, invalidTargets, planRebase } from '../src/rebase/plan';
+import { draggableLane, invalidReason, invalidTargets, planRebase } from '../src/rebase/plan';
 import { TestRepo } from './repoHelper';
 
 let repo: TestRepo;
@@ -38,12 +38,23 @@ describe('planRebase', () => {
     expect(draggableLane(layout, s.b)).toBeDefined();
   });
 
-  it('forbids dropping onto own commits, descendants and current base', async () => {
+  it('refuses own commits, the current base, and commits containing the whole branch; explains why', async () => {
     const s = setup();
+    // feat/z builds on feat/x's tip, so it contains all of feat/x.
+    repo.checkout('-b', 'feat/z', s.c);
+    const z = repo.commit('z');
+    repo.checkout('main');
     const { layout } = await load();
-    const invalid = invalidTargets(layout, draggableLane(layout, s.b)!);
-    for (const sha of [s.a, s.b, s.c, s.d, s.m1]) expect(invalid.has(sha)).toBe(true);
+    const x = draggableLane(layout, s.b)!;
+    const invalid = invalidTargets(layout, x);
+    for (const sha of [s.a, s.b, s.c, s.m1, z]) expect(invalid.has(sha)).toBe(true);
+    // feat/y forked from b: it has part of feat/x but not c, so dropping onto it is allowed.
+    expect(invalid.has(s.d)).toBe(false);
     expect(invalid.has(s.m3)).toBe(false);
+    expect(invalidReason(layout, x, s.b)).toBe('That commit is part of feat/x itself.');
+    expect(invalidReason(layout, x, s.m1)).toBe('feat/x already starts from that commit.');
+    expect(invalidReason(layout, x, z)).toBe('That commit already contains all of feat/x.');
+    expect(invalidReason(layout, x, s.d)).toBeUndefined();
   });
 
   it('uses trunk tip as upstream for trunk-based branches and warns about stacks', async () => {
@@ -66,13 +77,14 @@ describe('planRebase', () => {
 });
 
 describe('planRebase worktrees', () => {
-  it('refuses branches checked out in another worktree', async () => {
+  it('plans a rebase in the worktree that has the branch checked out', async () => {
     const s = setup();
     const { raw, layout } = await load();
     raw.branches.find((b) => b.name === 'feat/x')!.worktree = '/elsewhere';
-    expect(() => planRebase(raw, layout, draggableLane(layout, s.b)!, s.m3, { dirty: false })).toThrow(
-      /checked out in another worktree \(\/elsewhere\)/,
-    );
+    const plan = planRebase(raw, layout, draggableLane(layout, s.b)!, s.m3, { dirty: false });
+    expect(plan.worktree).toBe('/elsewhere');
+    expect(plan.warnings.join('\n')).toMatch(/checked out in the worktree \/elsewhere; the rebase runs there/);
+    expect(plan.warnings.join('\n')).not.toMatch(/This will check out/);
   });
 });
 

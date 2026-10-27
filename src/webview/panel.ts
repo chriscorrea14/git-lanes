@@ -495,8 +495,20 @@ export class GraphPanel {
     });
     const lane = layout.lanes.findIndex((l) => l.kind === 'branch' && l.name === branch);
     if (lane < 0) throw new Error(`No lane for ${branch}.`);
-    const plan = planRebase(this.raw, layout, lane, target, { dirty: await isDirty(this.git) });
-    const count = await replayCount(this.git, plan);
+    const wt = this.raw.branches.find((b) => b.name === branch)?.worktree;
+    // A branch checked out in another worktree can only be rebased there.
+    const git = wt ? new Git(wt, this.api.git.path) : this.git;
+    const plan = planRebase(this.raw, layout, lane, target, { dirty: await isDirty(git) });
+    // If the target already contains some of the branch (e.g. it merged an older version of it),
+    // replay only the branch commits it doesn't have: use the target itself as the upstream when
+    // that means fewer commits to replay.
+    let count = await replayCount(this.git, plan);
+    const fromTarget = await replayCount(this.git, { ...plan, upstream: target });
+    if (fromTarget < count) {
+      plan.upstream = target;
+      count = fromTarget;
+      plan.warnings.unshift(`That commit already contains part of ${branch}; only the commits it's missing are replayed.`);
+    }
     const t = this.raw.commits[target];
     const detail = [
       `Replays ${count} commit${count === 1 ? '' : 's'} onto ${target.slice(0, 7)} "${t?.subject ?? ''}".`,
@@ -505,7 +517,7 @@ export class GraphPanel {
     const choice = await vscode.window.showWarningMessage(`Rebase ${branch}?`, { modal: true, detail }, 'Rebase');
     if (choice !== 'Rebase') return;
 
-    const result = await this.withBusy(() => runRebase(this.git, plan));
+    const result = await this.withBusy(() => runRebase(git, plan));
     await this.refresh();
     if (result.status === 'error') {
       void vscode.window.showErrorMessage(`Rebase failed: ${result.message}`);
@@ -513,13 +525,18 @@ export class GraphPanel {
     }
     if (result.status === 'conflict') {
       void vscode.window.showWarningMessage(
-        `Rebase of ${branch} stopped on a conflict. Resolve it, then use Continue in the graph.`,
+        wt
+          ? `Rebase of ${branch} stopped on a conflict in the worktree ${wt}. Resolve it there, then run "git rebase --continue" (or --abort) in that folder.`
+          : `Rebase of ${branch} stopped on a conflict. Resolve it, then use Continue in the graph.`,
       );
       return;
     }
-    const undo = await vscode.window.showInformationMessage(`Rebased ${branch} onto ${target.slice(0, 7)}.`, 'Undo');
+    const undo = await vscode.window.showInformationMessage(
+      `Rebased ${branch} onto ${target.slice(0, 7)}${wt ? ` (in ${wt})` : ''}.`,
+      'Undo',
+    );
     if (undo === 'Undo') {
-      await undoRebase(this.git, result.undo);
+      await undoRebase(git, result.undo);
       await this.refresh();
     }
   }

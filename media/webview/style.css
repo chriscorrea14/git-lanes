@@ -551,3 +551,19 @@ button.primary {
 button.primary:hover {
   background: var(--vscode-button-hoverBackground);
 }
+
+/* Transient message, e.g. why a drop was refused */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 15;
+  max-width: min(640px, 90vw);
+  padding: 8px 14px;
+  border-radius: 4px;
+  background: var(--vscode-notifications-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-notifications-foreground, var(--fg));
+  border: 1px solid var(--vscode-notifications-border, var(--vscode-focusBorder));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
