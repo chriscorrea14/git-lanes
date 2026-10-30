@@ -209,15 +209,25 @@ export function computeLayout(raw: RawGraph, opts: LayoutOptions): Layout {
     }
   }
   const tipDate = (l: Lane) => raw.commits[l.commits[0]]?.date ?? 0;
-  const order: number[] = [];
-  const visit = (idx: number) => {
-    order.push(idx);
-    lanes
-      .filter((l) => l.index !== 0 && parentLane.get(l.index) === idx)
-      .sort((a, b) => tipDate(b) - tipDate(a) || a.index - b.index)
-      .forEach((l) => visit(l.index));
+  // Children of each lane in the cluster tree, newest tip first. Their order is refined below to
+  // avoid crossing lines; ties keep this order.
+  const siblings = new Map<number, number[]>();
+  for (const l of lanes.slice(1)) {
+    const p = parentLane.get(l.index)!;
+    siblings.set(p, [...(siblings.get(p) ?? []), l.index]);
+  }
+  for (const list of siblings.values()) {
+    list.sort((a, b) => tipDate(lanes[b]) - tipDate(lanes[a]) || a - b);
+  }
+  const buildOrder = () => {
+    const out: number[] = [];
+    const visit = (idx: number) => {
+      out.push(idx);
+      for (const c of siblings.get(idx) ?? []) visit(c);
+    };
+    visit(0);
+    return out;
   };
-  visit(0);
 
   // --- HEAD. ---
   const headLane = lanes.find((l) => (raw.head.branch ? l.name === raw.head.branch : l.kind === 'detached'));
@@ -263,27 +273,81 @@ export function computeLayout(raw: RawGraph, opts: LayoutOptions): Layout {
     rawRow.get(l.commits[0])! - 1, // the merge curve arrives in the row above the tip
     Math.max(rawRow.get(l.commits.at(-1)!)!, reach.get(l.index) ?? 0),
   ];
-  let nextColumn = 0;
-  let pending: Lane[] = [];
-  const flush = () => {
-    const cols: [number, number][][] = [];
-    for (const l of pending.map((l) => ({ l, occ: occupancy(l) })).sort((a, b) => a.occ[0] - b.occ[0])) {
-      const [top, bottom] = l.occ;
-      let c = cols.findIndex((iv) => iv.every(([a, b]) => bottom < a || top > b));
-      if (c < 0) c = cols.push([]) - 1;
-      cols[c].push(l.occ);
-      l.l.column = nextColumn + c;
+  /** Columns for a given lane order (merged side-chains packed at the end of their cluster). */
+  const assignColumns = (order: number[]) => {
+    const col = new Map<number, number>();
+    let next = 0;
+    let pending: Lane[] = [];
+    const flush = () => {
+      const cols: [number, number][][] = [];
+      for (const l of pending.map((l) => ({ l, occ: occupancy(l) })).sort((a, b) => a.occ[0] - b.occ[0])) {
+        const [top, bottom] = l.occ;
+        let c = cols.findIndex((iv) => iv.every(([a, b]) => bottom < a || top > b));
+        if (c < 0) c = cols.push([]) - 1;
+        cols[c].push(l.occ);
+        col.set(l.l.index, next + c);
+      }
+      next += cols.length;
+      pending = [];
+    };
+    for (const idx of order) {
+      const l = lanes[idx];
+      if (idx !== 0 && parentLane.get(idx) === 0) flush(); // a new top-level cluster starts
+      if (l.kind === 'merged') pending.push(l);
+      else col.set(idx, next++);
     }
-    nextColumn += cols.length;
-    pending = [];
+    flush();
+    return { col, count: next };
   };
-  for (const idx of order) {
-    const l = lanes[idx];
-    if (idx !== 0 && parentLane.get(idx) === 0) flush(); // a new top-level cluster starts
-    if (l.kind === 'merged') pending.push(l);
-    else l.column = nextColumn++;
+
+  // Lines that cross lanes: each fork/merge line runs horizontally just above the commit it joins,
+  // crossing every column in between whose lane line is drawn at that height.
+  const crossEdges = edges
+    .filter((e) => owner.get(e.from) !== owner.get(e.to))
+    .map((e) => ({ from: owner.get(e.from)!, to: owner.get(e.to)!, y: rawRow.get(e.to)! - 0.5 }));
+  const spans = new Map<number, [number, number]>(
+    lanes.map((l) => {
+      const [top, bottom] = occupancy(l);
+      return [l.index, [l.kind === 'merged' ? top : top + 1, bottom + 0.5]];
+    }),
+  );
+  const crossings = (col: Map<number, number>) => {
+    const byColumn = new Map<number, [number, number][]>();
+    for (const [lane, c] of col) byColumn.set(c, [...(byColumn.get(c) ?? []), spans.get(lane)!]);
+    let n = 0;
+    for (const e of crossEdges) {
+      const a = col.get(e.from)!;
+      const b = col.get(e.to)!;
+      for (let c = Math.min(a, b) + 1; c < Math.max(a, b); c++) {
+        if (byColumn.get(c)?.some(([t, btm]) => t <= e.y && e.y <= btm)) n++;
+      }
+    }
+    return n;
+  };
+
+  // Local search: swap neighbouring siblings (with their whole sub-clusters) while it removes crossings.
+  let order = buildOrder();
+  let best = crossings(assignColumns(order).col);
+  for (let pass = 0; pass < 8 && best > 0; pass++) {
+    let improved = false;
+    for (const list of siblings.values()) {
+      for (let i = 0; i + 1 < list.length; i++) {
+        [list[i], list[i + 1]] = [list[i + 1], list[i]];
+        const candidate = buildOrder();
+        const n = crossings(assignColumns(candidate).col);
+        if (n < best) {
+          best = n;
+          order = candidate;
+          improved = true;
+        } else {
+          [list[i], list[i + 1]] = [list[i + 1], list[i]]; // undo
+        }
+      }
+    }
+    if (!improved) break;
   }
-  flush();
+  const { col: finalColumns, count: nextColumn } = assignColumns(order);
+  for (const [idx, c] of finalColumns) lanes[idx].column = c;
 
   // Renumber lanes left to right.
   const byColumn = [...order].sort((a, b) => lanes[a].column - lanes[b].column || order.indexOf(a) - order.indexOf(b));

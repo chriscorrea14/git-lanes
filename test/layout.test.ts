@@ -162,6 +162,17 @@ describe('ownership and lanes', () => {
     expect(edgeKinds(l)).toEqual(['f->mm:fork']);
   });
 
+  it('reorders sibling lanes to avoid a crossing, even against newest-first order', () => {
+    // p merges x (near the top) and y (lower). x is newer, so newest-first would put it next to p,
+    // and the merge line from p down to y would then cross x's lane.
+    const l = layout({
+      trunk: ['m2', 'm1'],
+      commits: { x1: ['x0'], x0: ['m1'], P2: ['P1', 'x1'], P1: ['p0', 'y1'], p0: ['m1'], y1: ['m1'] },
+      branches: { p: 'P2', x: 'x1', y: 'y1' },
+    });
+    expect(laneNames(l)).toEqual(['main', 'p', 'y', 'x']);
+  });
+
   it('orders unrelated top-level lanes by newest tip', () => {
     const l = layout({ trunk: ['m2', 'm1'], commits: { new1: ['m1'], old1: ['m1'] }, branches: { old: 'old1', new: 'new1' } });
     expect(laneNames(l)).toEqual(['main', 'new', 'old']);
