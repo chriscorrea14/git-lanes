@@ -833,6 +833,28 @@ function hidePopover(force = false) {
 
 const shaAt = (target: EventTarget | null) => (target as Element | null)?.closest?.('[data-sha]')?.getAttribute('data-sha') ?? undefined;
 
+/**
+ * While Ctrl/⌘ is held the popover stays out of the way, so the next commit to compare is easy to
+ * hit. The pinned popover comes back on release, unless a Ctrl/⌘-click started a comparison.
+ */
+let compareKeyHeld = false;
+function syncCompareKey(held: boolean) {
+  if (held === compareKeyHeld) return;
+  compareKeyHeld = held;
+  if (held) popover.classList.add('hidden');
+  else if (state.pinned) {
+    popover.classList.remove('hidden');
+    replacePinned();
+  }
+}
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Control' || ev.key === 'Meta') syncCompareKey(true);
+});
+document.addEventListener('keyup', (ev) => {
+  if (ev.key === 'Control' || ev.key === 'Meta') syncCompareKey(false);
+});
+window.addEventListener('blur', () => syncCompareKey(false));
+
 function highlightMerges(sha: string | undefined) {
   svg.querySelectorAll('.hl').forEach((n) => n.classList.remove('hl'));
   if (!sha) return;
@@ -846,9 +868,11 @@ svg.addEventListener('mouseover', (ev) => {
   if (drag) return;
   const sha = shaAt(ev.target);
   highlightMerges(sha);
-  if (sha && !state.pinned) showPopover(sha, (ev.target as Element).closest('[data-sha]')!, false, { x: ev.clientX, y: ev.clientY });
+  syncCompareKey(ev.ctrlKey || ev.metaKey);
+  if (sha && !state.pinned && !compareKeyHeld) showPopover(sha, (ev.target as Element).closest('[data-sha]')!, false, { x: ev.clientX, y: ev.clientY });
 });
 svg.addEventListener('mousemove', (ev) => {
+  syncCompareKey(ev.ctrlKey || ev.metaKey);
   // Keep the hover popover clear of the pointer as it moves within a commit.
   if (!drag && !state.pinned && hoverAnchor && !popover.classList.contains('hidden')) {
     placePopover(hoverAnchor, { x: ev.clientX, y: ev.clientY });

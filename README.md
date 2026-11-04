@@ -23,7 +23,7 @@ Control title bar.
 | Click a commit | Pin that popover. Each branch the commit is on gets a row: `name: [Checkout] [Push] [Merge into current] [Delete]` (confirmations and Undo where it matters); at the remote trunk's tip you can merge it into the current branch and list changed files with line counts (`+added ~modified −deleted`); click a file for its diff |
 | Click the selected commit again | Close its popover and details |
 | Double-click a commit | Check it out: the local branch whose tip it is, otherwise a detached HEAD at that commit |
-| Ctrl/⌘-click a second commit | Compare the two, as if applying the first commit you clicked onto the second (the second is the base); **Open all changes** opens the multi-file diff. Ctrl/⌘-click a selected commit to drop it |
+| Ctrl/⌘-click a second commit | Compare the two, as if applying the first commit you clicked onto the second (the second is the base); **Open all changes** opens the multi-file diff. Ctrl/⌘-click a selected commit to drop it. The popover hides while Ctrl/⌘ is held, so it can't cover the next commit |
 | Escape | Close the popover and details pane (or cancel a drag in progress) |
 | Drag a branch commit onto another commit | Rebase that whole branch (fork point → tip) onto the target, after a confirm dialog. **Undo** is offered afterwards |
 | Click `… N commits …` | Expand collapsed trunk history |
