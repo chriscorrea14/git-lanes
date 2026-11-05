@@ -2,7 +2,7 @@
   "name": "git-lanes",
   "displayName": "Git Lanes",
   "description": "Compact per-branch swimlane git graph with diffs and drag-to-rebase",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "chriscorrea14",
   "icon": "media/icons/icon.png",
   "license": "MIT",
