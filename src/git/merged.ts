@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { RawGraph } from '../types';
 import type { Git } from './gitCli';
 
@@ -24,14 +25,33 @@ export interface SideChain {
 /** Trunk commits indexed per scan, newest first. */
 const TRUNK_SCAN_LIMIT = 1000;
 
-/** Parses `git patch-id` output ("<patch-id> <commit>" per line) into commit -> patch-id. */
-export function parsePatchIds(out: string): Map<string, string> {
-  const ids = new Map<string, string>();
-  for (const line of out.split('\n')) {
-    const [pid, commit] = line.trim().split(/\s+/);
-    if (pid && commit) ids.set(commit, pid);
+/**
+ * Identifies a change by what it adds and removes, per file. Unlike `git patch-id`, this ignores
+ * context lines, so a change still matches after something next to it changed on trunk. Binary files
+ * have no lines to compare, so they count by their resulting content (needs `git diff --full-index`).
+ */
+export function changedLinesId(patch: string): string | null {
+  if (!patch.trim()) return null;
+  const hash = createHash('sha1');
+  let inHunk = false;
+  let newBlob = '';
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      inHunk = false;
+      hash.update(`${line}\n`);
+    } else if (inHunk) {
+      if (line[0] === '+' || line[0] === '-' || line[0] === '\\') hash.update(`${line}\n`);
+    } else if (line.startsWith('@@ ')) {
+      inHunk = true;
+    } else if (line.startsWith('index ')) {
+      newBlob = line.split(/\.\.|\s/)[2] ?? '';
+    } else if (line.startsWith('Binary files ')) {
+      hash.update(`${newBlob}\n`);
+    } else if (!/^(dis)?similarity index /.test(line)) {
+      hash.update(`${line}\n`); // ---/+++, modes, renames
+    }
   }
-  return ids;
+  return hash.digest('hex');
 }
 
 /** Parses `git log --name-only --format='commit %H'` into commit -> sorted file list key. */
@@ -54,14 +74,14 @@ export function parseNameOnly(out: string): Map<string, string> {
 }
 
 /**
- * Detects squash- and rebase-merged branches by patch equivalence with trunk:
+ * Detects squash- and rebase-merged branches by matching their changed lines with trunk:
  * - squash: the branch's whole change (merge-base..tip as one diff) matches one trunk commit,
  *   including a merge commit's change relative to its first parent (GitLab "squash + merge commit");
- * - rebase: every branch commit has a patch-equivalent trunk commit.
+ * - rebase: every branch commit has an equivalent trunk commit.
  *
  * To stay fast on big repos, trunk is indexed by which files each commit touched (cheap), and
- * patch-ids are only computed for trunk commits touching exactly the same files as the change in
- * question. Patch-ids are cached forever (commits are immutable); the file index is extended
+ * change ids are only computed for trunk commits touching exactly the same files as the change in
+ * question. Change ids are cached forever (commits are immutable); the file index is extended
  * incrementally as trunk moves.
  */
 export class MergeDetector {
@@ -70,8 +90,8 @@ export class MergeDetector {
   /** Trunk range indexed so far: first-parent commits after `base` up to `tip`. */
   private covered?: { base: string; tip: string };
   private trunkTip?: string;
-  /** commit (or "base..tip") -> patch-id; immutable, never cleared */
-  private patchIdCache = new Map<string, string | null>();
+  /** commit (or "base..tip") -> change id; immutable, never cleared */
+  private changeIdCache = new Map<string, string | null>();
   private results = new Map<string, MergedInfo | null>();
 
   constructor(private readonly git: Git) {}
@@ -199,26 +219,21 @@ export class MergeDetector {
     }
   }
 
-  private async patchId(diffArgs: string[], cacheKey: string): Promise<string | null> {
-    if (this.patchIdCache.has(cacheKey)) return this.patchIdCache.get(cacheKey)!;
-    const patch = await this.git.run(diffArgs);
-    let pid: string | null = null;
-    if (patch.trim()) {
-      const r = await this.git.exec(['patch-id', '--stable'], undefined, patch);
-      pid = r.code === 0 ? [...parsePatchIds(r.stdout).values()][0] ?? null : null;
-    }
-    this.patchIdCache.set(cacheKey, pid);
-    return pid;
+  private async changeId(from: string, to: string, cacheKey: string): Promise<string | null> {
+    if (this.changeIdCache.has(cacheKey)) return this.changeIdCache.get(cacheKey)!;
+    const id = changedLinesId(await this.git.run(['diff', '--full-index', from, to, '--']));
+    this.changeIdCache.set(cacheKey, id);
+    return id;
   }
 
-  /** Patch-id of a single commit's change (merges: against the first parent). */
-  private commitPatchId(commit: string): Promise<string | null> {
-    return this.patchId(['diff', `${commit}^1`, commit, '--'], commit);
+  /** Change id of a single commit (merges: against the first parent). */
+  private commitChangeId(commit: string): Promise<string | null> {
+    return this.changeId(`${commit}^1`, commit, commit);
   }
 
-  /** The trunk commit among `candidates` whose change has patch-id `pid`, if any. */
-  private async findTrunk(pid: string, candidates: string[] | undefined): Promise<string | undefined> {
-    for (const c of candidates ?? []) if ((await this.commitPatchId(c)) === pid) return c;
+  /** The trunk commit among `candidates` whose change has id `id`, if any. */
+  private async findTrunk(id: string, candidates: string[] | undefined): Promise<string | undefined> {
+    for (const c of candidates ?? []) if ((await this.commitChangeId(c)) === id) return c;
     return undefined;
   }
 
@@ -227,8 +242,8 @@ export class MergeDetector {
     const wholeFiles = (await this.git.run(['diff', '--name-only', base, tip, '--'])).split('\n').filter(Boolean).sort().join('\n');
     const squashCandidates = this.byFiles.get(wholeFiles);
     if (squashCandidates) {
-      const pid = await this.patchId(['diff', base, tip, '--'], `${base}..${tip}`);
-      const hit = pid && (await this.findTrunk(pid, squashCandidates));
+      const id = await this.changeId(base, tip, `${base}..${tip}`);
+      const hit = id && (await this.findTrunk(id, squashCandidates));
       if (hit) return { tip, how: 'squash', trunkCommit: hit };
     }
 
@@ -241,8 +256,8 @@ export class MergeDetector {
     for (const [commit, files] of perCommit) {
       const candidates = this.byFiles.get(files);
       if (!candidates) return null;
-      const pid = await this.commitPatchId(commit);
-      const hit = pid && (await this.findTrunk(pid, candidates));
+      const id = await this.commitChangeId(commit);
+      const hit = id && (await this.findTrunk(id, candidates));
       if (!hit) return null;
       newest ??= hit;
     }

@@ -25,10 +25,10 @@ export class Git {
   ) {}
 
   /** Runs git and returns the result without throwing on a non-zero exit. */
-  exec(args: string[], env?: Record<string, string>, input?: string): Promise<RunResult> {
+  exec(args: string[], env?: Record<string, string>): Promise<RunResult> {
     const start = Date.now();
     return new Promise<RunResult>((resolve) => {
-      const child = execFile(
+      execFile(
         this.gitPath,
         args,
         { cwd: this.cwd, maxBuffer: 256 * 1024 * 1024, env: { ...process.env, ...env } },
@@ -37,7 +37,6 @@ export class Git {
           resolve({ stdout, stderr, code });
         },
       );
-      if (input !== undefined) child.stdin?.end(input);
     }).then((result) => {
       this.log?.(args, result, Date.now() - start);
       return result;
